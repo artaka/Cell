@@ -9,16 +9,12 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org)
 [![MinIO](https://img.shields.io/badge/MinIO-S3_Storage-C72C48?style=for-the-badge&logo=minio&logoColor=white)](https://min.io)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com)
-[![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Vite](https://img.shields.io/badge/Vite-6.1-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.4-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)](https://tailwindcss.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
 <br/>
 
 **Cell** — это современная open-source платформа для мгновенного обмена сообщениями и медиафайлами, а также проведения голосовых и видеоконференций с низкой задержкой. 
-Архитектура построена на микросервисной модели: Go-бэкенд для бизнес-логики и WebSockets, специализированный SFU-сервер на Pion WebRTC для маршрутизации медиапотоков, быстрый React 19 интерфейс и полнофункциональная инфраструктура в Docker.
+Архитектура построена на микросервисной модели: Go-бэкенд для бизнес-логики и WebSockets, специализированный SFU-сервер на Pion WebRTC для маршрутизации медиапотоков и полнофункциональная инфраструктура в Docker.
 
 [Особенности](#-ключевые-особенности) • [Архитектура](#-архитектура-системы) • [Стек технологий](#-стек-технологий) • [Быстрый старт](#-быстрый-старт-docker-compose) • [Локальная разработка](#-локальная-разработка) • [API и протокол](#-api-и-протокол-реального-времени) • [Roadmap](#-roadmap)
 
@@ -49,12 +45,6 @@
 - **Фото и видео:** загрузка вложений до 50 МБ с превью, спиннером загрузки и просмотром в Lightbox-галерее.
 - **Умный парсер тегов:** хранение медиа-вложений и системных событий звонков в виде структурированных тегов (`{{media:...}}`, `{{call:...}}`) с обратной совместимостью для текста.
 - **Аватары:** поддержка загрузки и кэширования аватаров пользователей и групп в MinIO.
-
-### 🎨 Интерфейс и UX
-- **React 19 + TypeScript + Vite:** ультрабыстрый рендеринг и строгая типизация.
-- **Современный UI / Dark & Light Theme:** стильная темная и светлая темы с плавной анимацией и Glassmorphism-эффектами.
-- **PWA (Progressive Web App):** поддержка установки приложения на десктоп и мобильные устройства, работа с сервис-воркерами.
-- **Аудио-уведомления:** ненавязчивые звуковые эффекты для входящих сообщений.
 - **Быстрый нечеткий поиск:** мгновенный поиск собеседников по имени и email с использованием PostgreSQL триграммных индексов (`pg_trgm`).
 
 ---
@@ -88,7 +78,6 @@ flowchart TD
 | **Nginx** | `80` | Nginx Alpine | Единая точка входа, SSL-терминация, проксирование HTTP/WS, раздача статики SPA |
 | **Backend API** | `8080` (внутр.) | Go, Gin, gorilla/websocket, pgx | REST API, JWT-авторизация, управление чатами, чат-сокетами и загрузкой в S3 |
 | **Calls Service** | `8000` (внутр.) + `50000-50050/udp` | Go, Pion WebRTC, gorilla/websocket | WebRTC SFU медиасервер, сигналинг звонков, синхронизация треков |
-| **Frontend** | — (билд в Nginx) | React 19, Vite, Tailwind CSS, Lucide | Пользовательский интерфейс, аудиорекордер, WebRTC клиент, PWA |
 | **PostgreSQL** | `5432` | Postgres 16 Alpine, `pg_trgm`, `pgcrypto` | Реляционное хранилище пользователей, чатов, прав и сообщений |
 | **MinIO** | `9000` (API), `9001` (Web) | MinIO S3 Server | Хранилище медиафайлов, аватарок и голосовых сообщений |
 
@@ -104,12 +93,6 @@ flowchart TD
   - **pgx/v5** — высокопроизводительный драйвер PostgreSQL с пулом соединений (`puddle`).
   - **AWS SDK for Go v2** — интеграция с S3-совместимым хранилищем MinIO.
   - **golang-jwt/v5** — генерация и валидация JWT-токенов доступа.
-
-- **Frontend & Client:**
-  - **React 19** & **TypeScript 5.7**
-  - **Vite 6** & **vite-plugin-pwa**
-  - **Tailwind CSS 3.4**
-  - **Lucide React** (иконки)
 
 - **База данных и инфраструктура:**
   - **PostgreSQL 16** (триграммные GIN-индексы для поиска `pg_trgm`, генерация UUID через `pgcrypto`, составные B-Tree индексы для пагинации сообщений).
@@ -147,24 +130,6 @@ Cell/
 │   ├── index.html            # Standalone страница для тестирования WebRTC
 │   ├── Dockerfile            # Мультистейдж сборка Calls-сервера
 │   └── go.mod
-│
-├── frontend/                 # Клиентское приложение (React 19 + Vite)
-│   ├── src/
-│   │   ├── api/              # Клиент для REST API (Auth, Chats, Calls, Files)
-│   │   ├── components/
-│   │   │   ├── auth/         # Авторизация и регистрация
-│   │   │   ├── chat/         # Окно сообщений, инпут, пузыри и CallModal (WebRTC)
-│   │   │   ├── common/       # Аватары, кнопки, модальные окна, тосты
-│   │   │   ├── media/        # Lightbox, диктофон голосовых, пикер файлов
-│   │   │   ├── modals/       # Создание диалогов, групп, профиль и настройки
-│   │   │   ├── pwa/          # Баннер установки PWA
-│   │   │   └── sidebar/      # Список чатов, поиск, шапка
-│   │   ├── context/          # React Context (Auth, Chat, UI, Theme)
-│   │   ├── styles/           # Tailwind и кастомные CSS-модули
-│   │   ├── utils/            # Парсер медиатегов, звуки, форматирование дат
-│   │   └── ws/               # Клиентский сервис работы с WebSocket
-│   ├── Dockerfile            # Nginx-контейнер со статикой Vite
-│   └── package.json
 │
 ├── nginx/
 │   └── default.conf          # Конфигурация обратного прокси и маршрутизации
@@ -379,28 +344,6 @@ sequenceDiagram
 - [ ] **Push-уведомления:** интеграция Web Push API и Firebase Cloud Messaging (FCM).
 - [ ] **Реакции и треды:** реакции эмодзи на сообщения и ответы в цепочках.
 - [ ] **TURN-сервер (coturn):** встроенный контейнер для гарантированного соединения через строгие симметричные NAT.
-
----
-
-## 🤝 Вклад в проект (Contributing)
-
-Мы приветствуем любые улучшения, исправления багов и новые идеи!
-
-1. Сделайте Fork репозитория.
-2. Создайте ветку для вашей функциональности:
-   ```bash
-   git checkout -b feature/amazing-feature
-   ```
-3. Зафиксируйте ваши изменения:
-   ```bash
-   git commit -m "Add amazing new feature"
-   ```
-4. Отправьте ветку в удаленный репозиторий:
-   ```bash
-   git push origin feature/amazing-feature
-   ```
-5. Откройте **Pull Request** с подробным описанием проделанной работы.
-
 ---
 
 ## 📄 Лицензия
