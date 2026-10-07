@@ -1,0 +1,2529 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Cell Messenger API",
+    "version": "1.0.0",
+    "description": "API документация для бэкенда Cell Messenger (Go / Gin / WebSocket / PostgreSQL / S3 MinIO).\n\n### Архитектура и возможности\n* **Аутентификация (JWT):** Регистрация и авторизация пользователей с выдачей подписанного токена HMAC-SHA256 (срок действия 24 часа).\n* **Пользователи:** Получение профиля по UUID, поиск других пользователей по имени или email с ранжированием результатов.\n* **Чаты:**\n  * Личные чаты (1-on-1): создание или получение существующего диалога с уникальной парой пользователей.\n  * Групповые чаты: создание групп с назначением роли владельца (owner) создателю и участников (member).\n  * Список чатов: список активных чатов с превью последнего сообщения, URL аватара и счетчиком непрочитанных.\n  * Участники чата: список пользователей чата с ролями (owner, \u0007dmin, member) и аватарами.\n* **Сообщения:**\n  * Получение истории сообщений чата с курсорной пагинацией (cursor, limit).\n* **Файловое хранилище (S3 / MinIO):**\n  * Загрузка аватара текущего пользователя: POST /api/v1/files/avatar\n  * Загрузка аватара группы: POST /api/v1/files/chats/{id}/avatar\n  * Загрузка медиа (фото, видео, голосовые и аудиосообщения): POST /api/v1/files/messages/\n  * Поддерживаемые форматы и типы:\n    * Изображения (image): .jpg, .jpeg, .png, .webp, .gif\n    * Видео (\u000bideo): .mp4, .mov\n    * Аудио и голосовые сообщения (\u0007udio): .webm, .ogg, .mp3, .m4a, .wav\n  * Максимальный размер файла: 50 МБ.\n* **WebSocket протокол реального времени:**\n  * Точка входа: GET /api/v1/ws/?token=<JWT> с апгрейдом протокола.\n  * Клиентские действия: отправка сообщения (message:send), индикация набора текста (\typing), отметка о прочтении (\nead).\n  * Серверные события: подтверждение доставки автору (message:ack), трансляция нового сообщения собеседникам (message:new), трансляция набора текста (\typing), отметка о прочтении (\nead), ошибки выполнения (error).\n\n### Авторизация запросов\nЗащищенные эндпоинты требуют заголовок:\n`http\nAuthorization: Bearer <token>\n`\n",
+    "contact": {
+      "name": "Cell API Team"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "Прямое подключение к Go серверу (локально или контейнер API)"
+    },
+    {
+      "url": "http://localhost",
+      "description": "Подключение через Nginx Reverse Proxy"
+    },
+    {
+      "url": "/",
+      "description": "Относительный корень сервера"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Auth",
+      "description": "Регистрация и авторизация пользователей"
+    },
+    {
+      "name": "Users",
+      "description": "Просмотр профилей пользователей"
+    },
+    {
+      "name": "Chats",
+      "description": "Управление диалогами, группами, участниками и историей сообщений"
+    },
+    {
+      "name": "Files",
+      "description": "Загрузка медиафайлов, аватаров пользователей и групповых чатов (S3 / MinIO)"
+    },
+    {
+      "name": "WebSocket",
+      "description": "События и сообщения реального времени через WebSocket"
+    },
+    {
+      "name": "System",
+      "description": "Системные маршруты (health check, веб-клиент)"
+    },
+    {
+      "name": "Calls",
+      "description": "Управление аудио- и видеозвонками (WebRTC SFU, автономные комнаты звонков)"
+    }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Веб-интерфейс мессенджера",
+        "description": "Возвращает встроенную HTML-страницу веб-клиента мессенджера.",
+        "operationId": "getWebClient",
+        "responses": {
+          "200": {
+            "description": "HTML страница веб-клиента",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Проверка статуса сервиса",
+        "description": "Возвращает статус работоспособности сервера.",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Сервис работает корректно",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                },
+                "example": {
+                  "status": "ok"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/register": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Регистрация нового пользователя",
+        "description": "Регистрирует нового пользователя. Хеширует пароль алгоритмом bcrypt с фактором стоимости 12. При успешной регистрации возвращает данные созданного пользователя и JWT токен.",
+        "operationId": "registerUser",
+        "requestBody": {
+          "required": true,
+          "description": "Параметры нового пользователя",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Пользователь успешно создан",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации входных данных (короткий пароль, некорректный email и т.д.)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Key: 'RegisterRequest.Password' Error:Field validation for 'Password' failed on the 'min' tag"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Пользователь с таким email или логином уже зарегистрирован",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "user already exist or database error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка сервера при хешировании пароля или генерации JWT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "failed to generate acces token",
+                  "sys": "crypto/bcrypt: internal error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Вход пользователя в систему",
+        "description": "Проверяет email и пароль пользователя, возвращает данные профиля и подписанный JWT токен.",
+        "operationId": "loginUser",
+        "requestBody": {
+          "required": true,
+          "description": "Учетные данные пользователя",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Успешный вход",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректное тело запроса или ошибка валидации",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Key: 'LoginRequest.Email' Error:Field validation for 'Email' failed on the 'email' tag"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Неверный пароль",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "wrong password"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Пользователь с данным email не найден",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "user with this email not found"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка генерации токена на сервере",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "failed to generate token"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Получение пользователя по идентификатору",
+        "description": "Возвращает публичную информацию о пользователе (ID, имя пользователя, email) по его UUID.",
+        "operationId": "getUserById",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "UUID пользователя",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Пользователь найден",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Пользователь не найден",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "user not found"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка базы данных",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "database error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/chats/users/search": {
+      "get": {
+        "tags": [
+          "Chats",
+          "Users"
+        ],
+        "summary": "Поиск пользователей по имени или email",
+        "description": "Ищет зарегистрированных пользователей, имя пользователя или email которых содержит подстроку `q`. Исключает текущего авторизованного пользователя. Лимит возвращаемых записей — 20. Если строка запроса короче 2 символов, возвращается пустой список.",
+        "operationId": "searchUsers",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Поисковая подстрока (минимум 2 символа)",
+            "schema": {
+              "type": "string",
+              "minLength": 2
+            },
+            "example": "alex"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Результаты поиска пользователей",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSearchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Не авторизован",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "unauthorized"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка базы данных при поиске",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "database error",
+                  "sys": "context canceled"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/chats/direct": {
+      "post": {
+        "tags": [
+          "Chats"
+        ],
+        "summary": "Создание или открытие существующего личного чата",
+        "description": "Создает 1-на-1 чат с пользователем `user`. Если диалог между этими двумя пользователями уже существовал ранее, возвращает статус 200 с идентификатором уже существующего чата.",
+        "operationId": "createDirectChat",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "UUID целевого пользователя",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDirectChatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Диалог успешно создан",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectChatResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Диалог с этим пользователем уже существует",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExistingChatResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректное тело запроса",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "json: cannot unmarshal string into Go struct field..."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Не авторизован",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Authorization Header required"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Целевой пользователь не найден",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "user not found"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Попытка создать личный чат с самим собой",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "cannot create chat with yourself"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка базы данных",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "database error",
+                  "sys": "pq: connection reset"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/chats/group": {
+      "post": {
+        "tags": [
+          "Chats"
+        ],
+        "summary": "Создание группового чата",
+        "description": "Создает новый групповой чат с названием `title` и списком участников `user_ids`. Текущий пользователь автоматически добавляется как владелец с ролью `owner`, остальные — с ролью `member`.",
+        "operationId": "createGroupChat",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Название группы и список участников",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGroupChatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Групповой чат успешно создан",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewChatResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректное тело запроса или пустое название чата",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "chat title cannot be empty"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Не авторизован",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Authorization Header required"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка базы данных при создании группы",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "database error",
+                  "sys": "pq: unnest error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/chats/list": {
+      "get": {
+        "tags": [
+          "Chats"
+        ],
+        "summary": "Получение списка всех чатов текущего пользователя",
+        "description": "Возвращает список всех личных и групповых чатов, участником которых является текущий пользователь. Для личных чатов в `title` возвращается имя собеседника, для групповых — название группы. Включает превью последнего сообщения, его дату и количество непрочитанных сообщений.",
+        "operationId": "getChatList",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Список чатов пользователя",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Не авторизован",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "unauthorized"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка базы данных или сканирования строк",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "database error",
+                  "sys": "driver error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/chats/{id}/members": {
+      "get": {
+        "tags": [
+          "Chats"
+        ],
+        "summary": "Список участников чата",
+        "description": "Возвращает участников указанного чата с их ролями (`owner`, `admin`, `member`) и датой вступления. Доступ разрешен только тем пользователям, которые состоят в данном чате.",
+        "operationId": "getChatMembers",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "UUID чата",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "example": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Список участников чата",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatMembersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректный UUID чата",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "invalid chat_id"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Не авторизован",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Доступ запрещен или чат не найден (пользователь не является участником этого чата)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "access denied or chat not found"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка базы данных",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "database error",
+                  "sys": "pq: query timeout"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/chats/{id}/messages": {
+      "get": {
+        "tags": [
+          "Chats"
+        ],
+        "summary": "История сообщений чата с курсорной пагинацией",
+        "description": "Возвращает список сообщений чата в обратном хронологическом порядке (сначала самые новые). Поддерживает пагинацию через параметр `cursor`: для получения следующей (более старой) страницы передается `next_cursor` из предыдущего ответа.",
+        "operationId": "getChatMessages",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "UUID чата",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "example": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Количество возвращаемых сообщений (по умолчанию 30, максимум 100)",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            },
+            "example": 30
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "ID сообщения-курсора: возвращаются сообщения с ID строго меньше указанного (более старые). Если не указан, возвращаются самые свежие сообщения.",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "example": 250
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Список сообщений и метаданные пагинации",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatMessagesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректный UUID чата",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "invalid chat_id"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Не авторизован",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Доступ запрещен или чат не существует",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "access denied or chat not found"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Ошибка базы данных",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "database error",
+                  "sys": "pq: statement timeout"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/avatar": {
+      "post": {
+        "tags": [
+          "Files"
+        ],
+        "summary": "Загрузка аватара текущего пользователя",
+        "description": "Загружает аватар для авторизованного пользователя в объектное хранилище S3/MinIO. Имя объекта в хранилище формируется как \u0007vatar-{userID}. Допустимые форматы файлов: .jpg, .jpeg, .webp, .gif. Максимальный размер файла: 50MB.",
+        "operationId": "uploadUserAvatar",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Файл изображения аватара (.jpg, .jpeg, .webp, .gif, до 50MB)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Аватар успешно загружен",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/PhotoOrVideoUploadResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Пользователь не авторизован",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Файл отсутствует или превышает максимальный размер (50MB)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Неподдерживаемый формат изображения",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка сервера или сбой загрузки в S3",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/chats/{id}/avatar": {
+      "post": {
+        "tags": [
+          "Files"
+        ],
+        "summary": "Загрузка аватара группового чата",
+        "description": "Загружает аватар для группового чата с указанным ID в объектное хранилище S3/MinIO. Имя объекта в хранилище формируется как group-avatar-{id}. Допустимые форматы файлов: .jpg, .jpeg, .webp, .gif. Максимальный размер файла: 50MB.",
+        "operationId": "uploadGroupChatAvatar",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "UUID группового чата",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "example": "b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Файл изображения аватара чата (.jpg, .jpeg, .webp, .gif, до 50MB)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Аватар группы успешно загружен",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/PhotoOrVideoUploadResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Пользователь не авторизован",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Файл отсутствует или превышает максимальный размер (50MB)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Неподдерживаемый формат изображения",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка сервера или сбой загрузки в S3",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/messages/": {
+      "post": {
+        "tags": [
+          "Files"
+        ],
+        "summary": "Загрузка медиафайла для сообщений (фото, видео, голосовые/аудио)",
+        "description": "Загружает медиафайл (фотографию, видеозапись или голосовое/аудиосообщение) в объектное хранилище S3/MinIO для последующей отправки в сообщениях.\n\nПоддерживаемые форматы по категориям:\n* image — .jpg, .jpeg, .png, .webp, .gif\n* \u000bideo — .mp4, .mov\n* \u0007udio (голосовые сообщения и звук) — .webm, .ogg, .mp3, .m4a, .wav\n\nМаксимальный размер файла: 50MB.",
+        "operationId": "uploadMessageMedia",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Медиафайл: фото, видео или голосовое сообщение/аудиозапись (.jpg, .jpeg, .png, .webp, .gif, .mp4, .mov, .webm, .ogg, .mp3, .m4a, .wav; до 50MB)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Медиафайл успешно загружен",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/PhotoOrVideoUploadResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Пользователь не авторизован",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Файл отсутствует или превышает максимальный размер (50MB)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Неподдерживаемый формат медиафайла",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Внутренняя ошибка сервера или сбой загрузки в S3",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ws/": {
+      "get": {
+        "tags": [
+          "WebSocket"
+        ],
+        "summary": "Подключение к WebSocket серверу",
+        "description": "Инициализирует WebSocket-соединение для обмена сообщениями, индикации набора текста и подтверждений в реальном времени.\n\n### Аутентификация\nJWT токен передается в строке запроса в параметре `token`:\n`GET /api/v1/ws/?token=<JWT_TOKEN>`\n\n---\n\n### Протокол взаимодействия\n\nВсе пакеты передаются в формате JSON.\n\n#### 1. Клиент -> Сервер (Client Actions)\nКорневой конверт:\n```json\n{\n  \"action\": \"<string>\",\n  \"payload\": { ... }\n}\n```\n\n* **`message:send`** — отправка сообщения в чат:\n```json\n{\n  \"action\": \"message:send\",\n  \"payload\": {\n    \"client_msg_temp_id\": \"temp_1712000000\",\n    \"chat_id\": \"a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d\",\n    \"content\": \"Привет, как дела?\"\n  }\n}\n```\n\n* **`typing`** — отправка индикации набора текста:\n```json\n{\n  \"action\": \"typing\",\n  \"payload\": {\n    \"user_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"chat_id\": \"a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d\",\n    \"is_typing\": true\n  }\n}\n```\n\n* **`read`** — отметка о прочтении сообщений до указанного ID:\n```json\n{\n  \"action\": \"read\",\n  \"payload\": {\n    \"chat_id\": \"a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d\",\n    \"message_id\": 142\n  }\n}\n```\n\n---\n\n#### 2. Сервер -> Клиент (Server Events)\nКорневой конверт:\n```json\n{\n  \"event\": \"<string>\",\n  \"payload\": { ... }\n}\n```\n\n* **`message:ack`** — подтверждение автору о сохранении сообщения в БД:\n```json\n{\n  \"event\": \"message:ack\",\n  \"payload\": {\n    \"client_msg_temp_id\": \"temp_1712000000\",\n    \"message_id\": 204,\n    \"chat_id\": \"a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d\",\n    \"created_at\": \"2026-10-03T15:00:00Z\"\n  }\n}\n```\n\n* **`message:new`** — широковещательное уведомление собеседникам о новом сообщении:\n```json\n{\n  \"event\": \"message:new\",\n  \"payload\": {\n    \"id\": 204,\n    \"chat_id\": \"a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d\",\n    \"sender_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"content\": \"Привет, как дела?\",\n    \"created_at\": \"2026-10-03T15:00:00Z\"\n  }\n}\n```\n\n* **`typing`** — трансляция статуса набора текста участникам чата:\n```json\n{\n  \"event\": \"typing\",\n  \"payload\": {\n    \"user_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"chat_id\": \"a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d\",\n    \"is_typing\": true\n  }\n}\n```\n\n* **`read`** — трансляция обновления курсора прочтения:\n```json\n{\n  \"event\": \"read\",\n  \"payload\": {\n    \"user_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n    \"chat_id\": \"a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d\",\n    \"message_id\": 142\n  }\n}\n```\n\n* **`error`** — ошибка обработки действия:\n```json\n{\n  \"event\": \"error\",\n  \"payload\": {\n    \"client_msg_temp_id\": \"temp_1712000000\",\n    \"error\": \"forbidden: you are not a member of this chat\"\n  }\n}\n```\n",
+        "operationId": "connectWebSocket",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "description": "JWT токен авторизации пользователя",
+            "schema": {
+              "type": "string"
+            },
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Протокол успешно переключен (Switching Protocols to WebSocket)"
+          },
+          "400": {
+            "description": "Ошибка WebSocket апгрейда",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "failed to upgrade to websocket"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Токен не предоставлен или не прошел валидацию",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "missingToken": {
+                    "summary": "Токен не передан",
+                    "value": {
+                      "error": "access token not found"
+                    }
+                  },
+                  "invalidToken": {
+                    "summary": "Недействительный токен",
+                    "value": {
+                      "error": "invalid token"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calls/rooms": {
+      "post": {
+        "tags": [
+          "Calls"
+        ],
+        "summary": "Создание или получение активной комнаты звонка для чата",
+        "description": "Создает новую комнату для аудио/видео звонка в указанном чате или возвращает уже существующую активную комнату. Доступно только участникам чата.",
+        "operationId": "createCallRoom",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCallRoomRequest"
+              },
+              "example": {
+                "chat_id": "550e8400-e29b-41d4-a716-446655440000",
+                "type": "video"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Комната успешно создана",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallRoomResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Комната уже существует и активна в данном чате",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallRoomResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректный запрос или отсутствие chat_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Пользователь не авторизован",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Пользователь не является участником данного чата",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calls/rooms/{id}": {
+      "get": {
+        "tags": [
+          "Calls"
+        ],
+        "summary": "Информация о комнате звонка",
+        "description": "Возвращает текущее состояние комнаты звонка и список активных участников. Доступно только участникам чата, в котором запущен звонок.",
+        "operationId": "getCallRoom",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "UUID комнаты звонка",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Информация о комнате и участниках",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallRoomResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "description": "Пользователь не является участником чата этого звонка",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Комната звонка не найдена",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calls/rooms/{id}/end": {
+      "post": {
+        "tags": [
+          "Calls"
+        ],
+        "summary": "Завершение звонка в комнате",
+        "description": "Завершает звонок, рассылает событие 'call-ended' всем подключенным пирам и закрывает соединения. Доступно участникам чата.",
+        "operationId": "endCallRoom",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "UUID комнаты звонка",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Звонок успешно завершен",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndCallResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "description": "Пользователь не состоит в чате",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Комната звонка не найдена",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calls/active": {
+      "get": {
+        "tags": [
+          "Calls"
+        ],
+        "summary": "Проверка активного звонка в чате",
+        "description": "Проверяет, идет ли в данный момент звонок в указанном чате, и возвращает информацию о комнате и количестве подключенных участников.",
+        "operationId": "getActiveCall",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "chat_id",
+            "in": "query",
+            "required": true,
+            "description": "UUID чата для проверки",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Статус звонка в чате",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveCallResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "description": "Пользователь не состоит в чате",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calls/health": {
+      "get": {
+        "tags": [
+          "Calls",
+          "System"
+        ],
+        "summary": "Проверка здоровья сервиса звонков",
+        "description": "Возвращает статус сервиса CallsService и количество текущих активных комнат.",
+        "operationId": "getCallsHealth",
+        "responses": {
+          "200": {
+            "description": "Сервис работает в штатном режиме",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallsHealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calls/ws": {
+      "get": {
+        "tags": [
+          "Calls"
+        ],
+        "summary": "Сигнальный WebSocket для WebRTC SFU звонков",
+        "description": "Устанавливает полнодуплексное WebSocket соединение для сигнального протокола WebRTC. Обеспечивает обмен SDP Offer/Answer, ICE кандидатами и событиями входа/выхода участников.\n\n### Проверка авторизации\n* Передается `token` в query-параметре или заголовок `Authorization: Bearer <token>`.\n* Сервис проверяет членство пользователя в указанном чате (`chat_id`) через PostgreSQL.\n* Если пользователь не состоит в чате — соединение отклоняется с кодом 403 Forbidden.",
+        "operationId": "connectCallsWebSocket",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "description": "JWT токен авторизации",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chat_id",
+            "in": "query",
+            "required": false,
+            "description": "UUID чата (обязателен, если не указан room_id)",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "room_id",
+            "in": "query",
+            "required": false,
+            "description": "UUID комнаты звонка",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "description": "Тип звонка при автоматическом создании ('video' или 'audio')",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "video",
+                "audio"
+              ],
+              "default": "video"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Протокол успешно переключен на WebSocket (WebRTC SFU)"
+          },
+          "400": {
+            "description": "Не указаны chat_id или room_id"
+          },
+          "401": {
+            "description": "Токен не предоставлен или недействителен"
+          },
+          "403": {
+            "description": "Пользователь не является участником указанного чата"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Авторизационный JWT токен. Передается в заголовке `Authorization: Bearer <token>`"
+      }
+    },
+    "schemas": {
+      "RegisterRequest": {
+        "type": "object",
+        "required": [
+          "username",
+          "email",
+          "password"
+        ],
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 32,
+            "description": "Имя пользователя (от 3 до 32 символов)",
+            "example": "alex_smith"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "description": "Email адрес пользователя",
+            "example": "alex@example.com"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "minLength": 8,
+            "maxLength": 32,
+            "description": "Пароль учетной записи (от 8 до 32 символов)",
+            "example": "StrongPass123"
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "description": "Email пользователя",
+            "example": "alex@example.com"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "minLength": 8,
+            "maxLength": 32,
+            "description": "Пароль учетной записи",
+            "example": "StrongPass123"
+          }
+        }
+      },
+      "UserResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "username",
+          "email",
+          "avatar_url"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Уникальный UUID пользователя",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "username": {
+            "type": "string",
+            "description": "Имя пользователя",
+            "example": "alex_smith"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "description": "Электронная почта",
+            "example": "alex@example.com"
+          },
+          "avatar_url": {
+            "type": "string",
+            "description": "URL аватарки пользователя (пустая строка, если не установлена)",
+            "example": "/media/avatar-550e8400-e29b-41d4-a716-446655440000"
+          }
+        }
+      },
+      "AuthResponse": {
+        "type": "object",
+        "required": [
+          "user",
+          "token"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/UserResponse"
+          },
+          "token": {
+            "type": "string",
+            "description": "Подписанный JWT токен (HS256) сроком на 24 часа",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNTUwZTg0MDAtZTI5Yi00MWQ0LWE3MTYtNDQ2NjU1NDQwMDAwIiwidXNlcm5hbWUiOiJhbGV4X3NtaXRoIiwiZXhwIjoxNzEwMDg2NDAwfQ..."
+          }
+        }
+      },
+      "ChatType": {
+        "type": "string",
+        "enum": [
+          "direct",
+          "group",
+          "channel"
+        ],
+        "description": "Тип чата",
+        "example": "direct"
+      },
+      "MemberRole": {
+        "type": "string",
+        "enum": [
+          "owner",
+          "admin",
+          "member"
+        ],
+        "description": "Роль участника в чате",
+        "example": "owner"
+      },
+      "UserPreview": {
+        "type": "object",
+        "required": [
+          "id",
+          "username",
+          "avatar_url",
+          "is_online"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID пользователя",
+            "example": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+          },
+          "username": {
+            "type": "string",
+            "description": "Имя пользователя",
+            "example": "jane_doe"
+          },
+          "avatar_url": {
+            "type": "string",
+            "nullable": true,
+            "description": "Ссылка на аватарку пользователя",
+            "example": "https://example.com/avatar.png"
+          },
+          "is_online": {
+            "type": "boolean",
+            "description": "Онлайн статус",
+            "example": true
+          }
+        }
+      },
+      "CreateDirectChatRequest": {
+        "type": "object",
+        "required": [
+          "user"
+        ],
+        "properties": {
+          "user": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID пользователя для создания диалога",
+            "example": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+          }
+        }
+      },
+      "DirectChatResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "chat_type",
+          "created_at",
+          "user"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID созданного чата",
+            "example": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+          },
+          "chat_type": {
+            "$ref": "#/components/schemas/ChatType"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Время создания чата",
+            "example": "2026-10-03T14:30:00Z"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserPreview"
+          }
+        }
+      },
+      "ExistingChatResponse": {
+        "type": "object",
+        "required": [
+          "message",
+          "chat_id"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "chat already exists"
+          },
+          "chat_id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+          }
+        }
+      },
+      "CreateGroupChatRequest": {
+        "type": "object",
+        "required": [
+          "title",
+          "user_ids"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Название группового чата",
+            "example": "Проект Cell"
+          },
+          "user_ids": {
+            "type": "array",
+            "description": "Список UUID пользователей для включения в группу (создатель добавится автоматически)",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "example": [
+              "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+              "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+            ]
+          }
+        }
+      },
+      "NewChatResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "chat_type",
+          "title",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID группы",
+            "example": "b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e"
+          },
+          "chat_type": {
+            "$ref": "#/components/schemas/ChatType"
+          },
+          "title": {
+            "type": "string",
+            "description": "Название группы",
+            "example": "Проект Cell"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Время создания",
+            "example": "2026-10-03T14:30:00Z"
+          }
+        }
+      },
+      "MessagePreview": {
+        "type": "object",
+        "required": [
+          "id",
+          "sender_id",
+          "content",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "ID сообщения",
+            "example": 42
+          },
+          "sender_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID отправителя сообщения",
+            "example": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+          },
+          "content": {
+            "type": "string",
+            "description": "Текст сообщения",
+            "example": "Привет! Как дела?"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Время отправки сообщения",
+            "example": "2026-10-03T14:35:00Z"
+          }
+        }
+      },
+      "GetChatListItemResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "title",
+          "avatar_url",
+          "unread_count"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID чата",
+            "example": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ChatType"
+          },
+          "title": {
+            "type": "string",
+            "description": "Имя собеседника (для direct) или название группы (для group)",
+            "example": "jane_doe"
+          },
+          "avatar_url": {
+            "type": "string",
+            "description": "URL аватарки",
+            "example": ""
+          },
+          "last_message": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MessagePreview"
+              }
+            ],
+            "description": "Превью последнего сообщения в чате (может отсутствовать, если сообщений нет)"
+          },
+          "unread_count": {
+            "type": "integer",
+            "description": "Количество непрочитанных сообщений",
+            "example": 2
+          }
+        }
+      },
+      "ChatListResponse": {
+        "type": "object",
+        "required": [
+          "chats"
+        ],
+        "properties": {
+          "chats": {
+            "type": "array",
+            "description": "Список чатов пользователя",
+            "items": {
+              "$ref": "#/components/schemas/GetChatListItemResponse"
+            }
+          }
+        }
+      },
+      "ChatMemberResponse": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "username",
+          "avatar_url",
+          "role",
+          "joined_at"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID пользователя",
+            "example": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+          },
+          "username": {
+            "type": "string",
+            "description": "Имя пользователя",
+            "example": "jane_doe"
+          },
+          "role": {
+            "$ref": "#/components/schemas/MemberRole"
+          },
+          "joined_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Дата и время вступления в чат",
+            "example": "2026-10-03T12:00:00Z"
+          },
+          "avatar_url": {
+            "type": "string",
+            "description": "URL аватарки участника чата",
+            "example": "/media/avatar-9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+          }
+        }
+      },
+      "ChatMembersResponse": {
+        "type": "object",
+        "required": [
+          "members"
+        ],
+        "properties": {
+          "members": {
+            "type": "array",
+            "description": "Список участников чата",
+            "items": {
+              "$ref": "#/components/schemas/ChatMemberResponse"
+            }
+          }
+        }
+      },
+      "MessageResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "chat_id",
+          "sender_id",
+          "content",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Уникальный ID сообщения в БД",
+            "example": 105
+          },
+          "chat_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID чата",
+            "example": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+          },
+          "sender_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID автора сообщения",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "content": {
+            "type": "string",
+            "description": "Текст сообщения",
+            "example": "Привет! Рад тебя слышать."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Время создания сообщения",
+            "example": "2026-10-03T14:40:00Z"
+          }
+        }
+      },
+      "ChatMessagesResponse": {
+        "type": "object",
+        "required": [
+          "messages",
+          "has_more"
+        ],
+        "properties": {
+          "messages": {
+            "type": "array",
+            "description": "Массив сообщений чата (отсортирован DESC)",
+            "items": {
+              "$ref": "#/components/schemas/MessageResponse"
+            }
+          },
+          "next_cursor": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "description": "ID самого старого сообщения из текущей выборки, используемый как курсор для следующего запроса. null если сообщений больше нет.",
+            "example": 75
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "Флаг, указывающий на наличие более старых сообщений для пагинации",
+            "example": true
+          }
+        }
+      },
+      "UserSearchResponse": {
+        "type": "object",
+        "required": [
+          "users"
+        ],
+        "properties": {
+          "users": {
+            "type": "array",
+            "description": "Список найденных пользователей",
+            "items": {
+              "$ref": "#/components/schemas/UserResponse"
+            }
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Статус работы сервиса",
+            "example": "ok"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Описание ошибки",
+            "example": "invalid request payload"
+          },
+          "sys": {
+            "type": "string",
+            "description": "Системное/детализированное сообщение об ошибке (при наличии)",
+            "example": "context deadline exceeded"
+          }
+        }
+      },
+      "WSClientMessage": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "Тип действия: message:send | typing | read",
+            "example": "message:send"
+          },
+          "payload": {
+            "type": "object",
+            "description": "Тело действия"
+          }
+        }
+      },
+      "WSServerMessage": {
+        "type": "object",
+        "required": [
+          "event",
+          "payload"
+        ],
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "Тип события: message:ack | message:new | typing | read | error",
+            "example": "message:new"
+          },
+          "payload": {
+            "type": "object",
+            "description": "Данные события"
+          }
+        }
+      },
+      "WSSendMessagePayload": {
+        "type": "object",
+        "required": [
+          "client_msg_temp_id",
+          "chat_id",
+          "content"
+        ],
+        "properties": {
+          "client_msg_temp_id": {
+            "type": "string",
+            "description": "Временный ID сообщения, сгенерированный клиентом для сопоставления ACK",
+            "example": "temp_1712000000"
+          },
+          "chat_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID чата",
+            "example": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+          },
+          "content": {
+            "type": "string",
+            "description": "Текст сообщения",
+            "example": "Привет всем!"
+          }
+        }
+      },
+      "WSTypingPayload": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "chat_id",
+          "is_typing"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID пользователя, набирающего текст",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "chat_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID чата",
+            "example": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+          },
+          "is_typing": {
+            "type": "boolean",
+            "description": "true — начал печатать, false — перестал печатать",
+            "example": true
+          }
+        }
+      },
+      "WSReadPayload": {
+        "type": "object",
+        "required": [
+          "chat_id",
+          "message_id"
+        ],
+        "properties": {
+          "chat_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID чата",
+            "example": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+          },
+          "message_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "ID последнего прочитанного сообщения",
+            "example": 150
+          }
+        }
+      },
+      "WSMessageAckPayload": {
+        "type": "object",
+        "required": [
+          "client_msg_temp_id",
+          "message_id",
+          "chat_id",
+          "created_at"
+        ],
+        "properties": {
+          "client_msg_temp_id": {
+            "type": "string",
+            "description": "Временный ID сообщения",
+            "example": "temp_1712000000"
+          },
+          "message_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Постоянный ID сообщения в БД",
+            "example": 204
+          },
+          "chat_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID чата",
+            "example": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Время фиксации сообщения в БД",
+            "example": "2026-10-03T15:00:00Z"
+          }
+        }
+      },
+      "WSNewMessageNotification": {
+        "type": "object",
+        "required": [
+          "id",
+          "chat_id",
+          "sender_id",
+          "content",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "ID сообщения",
+            "example": 204
+          },
+          "chat_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID чата",
+            "example": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+          },
+          "sender_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID автора сообщения",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "content": {
+            "type": "string",
+            "description": "Текст сообщения",
+            "example": "Привет всем!"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Время отправки",
+            "example": "2026-10-03T15:00:00Z"
+          }
+        }
+      },
+      "WSReadNotification": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "chat_id",
+          "message_id"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID пользователя, прочитавшего сообщения",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "chat_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID чата",
+            "example": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+          },
+          "message_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Новый ID прочитанного сообщения",
+            "example": 150
+          }
+        }
+      },
+      "WSErrorPayload": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "client_msg_temp_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "Временный ID сообщения, если ошибка привязана к нему",
+            "example": "temp_1712000000"
+          },
+          "error": {
+            "type": "string",
+            "description": "Текст ошибки",
+            "example": "forbidden: you are not a member of this chat"
+          }
+        }
+      },
+      "PhotoOrVideoUploadResponse": {
+        "type": "object",
+        "required": [
+          "media_url",
+          "media_type"
+        ],
+        "properties": {
+          "media_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Публичный URL загруженного файла в S3/MinIO хранилище",
+            "example": "/media/550e8400-e29b-41d4-a716-446655440000.webm"
+          },
+          "media_type": {
+            "type": "string",
+            "description": "Тип загруженного медиа (image, \u000bideo, \u0007udio, \u0007vatar, Chat_avatar)",
+            "example": "audio",
+            "enum": [
+              "image",
+              "video",
+              "audio",
+              "avatar",
+              "Chat_avatar"
+            ]
+          }
+        }
+      },
+      "CreateCallRoomRequest": {
+        "type": "object",
+        "required": [
+          "chat_id"
+        ],
+        "properties": {
+          "chat_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID чата, в котором инициируется звонок",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "video",
+              "audio"
+            ],
+            "default": "video",
+            "description": "Тип звонка: видео или аудио",
+            "example": "video"
+          }
+        }
+      },
+      "CallParticipant": {
+        "type": "object",
+        "required": [
+          "peer_id",
+          "user_id",
+          "username",
+          "joined_at"
+        ],
+        "properties": {
+          "peer_id": {
+            "type": "string",
+            "description": "Уникальный идентификатор пира в сессии SFU",
+            "example": "a8f3b2c1d4e5"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID пользователя",
+            "example": "550e8400-e29b-41d4-a716-446655440001"
+          },
+          "username": {
+            "type": "string",
+            "description": "Имя пользователя",
+            "example": "alex_dev"
+          },
+          "joined_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Время подключения к комнате",
+            "example": "2026-10-05T07:30:00Z"
+          }
+        }
+      },
+      "CallRoomResponse": {
+        "type": "object",
+        "required": [
+          "room_id",
+          "chat_id",
+          "call_type",
+          "initiator_id",
+          "created_at",
+          "is_active",
+          "participants"
+        ],
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID комнаты звонка",
+            "example": "123e4567-e89b-12d3-a456-426614174000"
+          },
+          "chat_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID чата",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "call_type": {
+            "type": "string",
+            "enum": [
+              "video",
+              "audio"
+            ],
+            "description": "Тип звонка",
+            "example": "video"
+          },
+          "initiator_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID пользователя-инициатора",
+            "example": "550e8400-e29b-41d4-a716-446655440001"
+          },
+          "initiator_name": {
+            "type": "string",
+            "description": "Имя инициатора звонка",
+            "example": "alex_dev"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Время создания комнаты",
+            "example": "2026-10-05T07:30:00Z"
+          },
+          "is_active": {
+            "type": "boolean",
+            "description": "Флаг активности комнаты звонка",
+            "example": true
+          },
+          "participants": {
+            "type": "array",
+            "description": "Список текущих участников звонка",
+            "items": {
+              "$ref": "#/components/schemas/CallParticipant"
+            }
+          }
+        }
+      },
+      "ActiveCallResponse": {
+        "type": "object",
+        "required": [
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Признак наличия активного звонка в чате",
+            "example": true
+          },
+          "chat_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID чата",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "room": {
+            "$ref": "#/components/schemas/CallRoomResponse"
+          }
+        }
+      },
+      "EndCallResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "message",
+          "room_id"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok"
+          },
+          "message": {
+            "type": "string",
+            "example": "call ended"
+          },
+          "room_id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "123e4567-e89b-12d3-a456-426614174000"
+          }
+        }
+      },
+      "CallsHealthResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "service",
+          "active_rooms"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok"
+          },
+          "service": {
+            "type": "string",
+            "example": "CallsService"
+          },
+          "active_rooms": {
+            "type": "integer",
+            "description": "Количество активных комнат звонков",
+            "example": 3
+          }
+        }
+      }
+    }
+  }
+}
