@@ -297,7 +297,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 					"turns:global.relay.metered.ca:443?transport=tcp",
 				},
 				Username:       "089c7a03d37f148503bd0a37",
-				Credential:     "SSaJsDxbP7gSuJDU",
+				Credential:     "***",
 				CredentialType: webrtc.ICECredentialTypePassword,
 			},
 		},
